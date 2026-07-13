@@ -13,9 +13,15 @@
 #                    "status: running" (0 and >1 are both violations)
 #   - exploration:  PATHS.md has >= 1 avenue block whose own status line is
 #                    "unexplored" or "active"
-# NOT mechanically checked (prompt-level only): the novelty quota ("every
-# 5th dispatch opens an unexplored avenue") — that requires dispatch-history
-# tracking this hook does not keep.
+#   - novelty quota: once .autodev/dispatch_log has >= 5 lines, at least one
+#                    of the LAST 5 lines must have field 4 (tab-separated:
+#                    <iteration>\t<experiment-id>\t<avenue>\t
+#                    <opened-unexplored: yes|no>) equal to "yes" — i.e. at
+#                    least every 5th dispatch opens an unexplored avenue.
+#                    The orchestrator is responsible for appending one line
+#                    per dispatch (skill step 5, "Dispatch"); with fewer than
+#                    5 lines logged so far, this check is skipped entirely
+#                    (nothing to enforce yet).
 # Violations are named explicitly in the block reason every iteration.
 #
 # Modes (.autodev/MODE):
@@ -138,6 +144,19 @@ PATHS_FILE="$STATE_DIR/PATHS.md"
 paths_statuses=$(block_statuses "$PATHS_FILE")
 if ! printf '%s\n' "$paths_statuses" | grep -qE 'status: (unexplored|active)'; then
   violations+="EXPLORATION-VIOLATION: PATHS.md has no avenue with 'status: unexplored' or 'status: active'. Open a new avenue now — 'waiting for time/data' is never a reason to have zero open avenues. "
+fi
+
+# ---- Novelty-quota audit (dispatch-history-backed half of exploration) -----
+DISPATCH_LOG="$STATE_DIR/dispatch_log"
+dispatch_line_count=0
+if [[ -f "$DISPATCH_LOG" ]]; then
+  dispatch_line_count=$(grep -c '' "$DISPATCH_LOG" 2>/dev/null || echo 0)
+fi
+if (( dispatch_line_count >= 5 )); then
+  last5=$(tail -n 5 "$DISPATCH_LOG")
+  if ! printf '%s\n' "$last5" | grep -qE $'opened-unexplored:[[:space:]]*yes'; then
+    violations+="NOVELTY-QUOTA-VIOLATION: none of the last 5 dispatch_log entries opened an 'unexplored' avenue (need >= 1 in every 5). Your next dispatch MUST target an unexplored PATHS.md avenue, and remember to append its dispatch_log line. "
+  fi
 fi
 
 if [[ -n "$violations" ]]; then

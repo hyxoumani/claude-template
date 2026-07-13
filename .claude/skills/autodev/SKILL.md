@@ -18,9 +18,11 @@ EXPERIMENTS.md/PATHS.md it takes only that block's own first
 `- status: ...` line (occurrences of the word "status:" elsewhere in a
 block's prose/notes/code-fences are ignored), counts `status: proposed` and
 `status: running` experiment blocks, and checks for at least one
-`unexplored`/`active` PATHS.md avenue — naming violations in its block
-message. You cannot satisfy it by idling, and you must never satisfy it by
-faking statuses. Do not fight the hook; the only legitimate exits are the
+`unexplored`/`active` PATHS.md avenue. Once `.autodev/dispatch_log` has
+accumulated >= 5 lines, it also checks the last 5 for the novelty quota (see
+below) — naming violations in its block message. You cannot satisfy it by
+idling, and you must never satisfy it by faking statuses or dispatch_log
+entries. Do not fight the hook; the only legitimate exits are the
 completion gate (bounded mode) or the user (continuous mode).
 
 ## Prime directive: always be investigating
@@ -30,9 +32,11 @@ state you are allowed to be in — if every queued follow-up is blocked on
 wall-clock, that means your hypothesis generation has stalled, not that work
 ran out. Open a new avenue in PATHS.md instead. These invariants must hold
 at the end of EVERY iteration. The hook mechanically checks queue depth,
-dispatch, and the "at least one open avenue" half of exploration; the
-novelty quota (second half of #3) is prompt-level only — the hook keeps no
-dispatch history to check it against, so you must self-enforce it:
+dispatch, the "at least one open avenue" half of exploration, AND (once
+`.autodev/dispatch_log` has >= 5 lines) the novelty quota (second half of
+#3) — see the dispatch-log format below. Below 5 logged dispatches the
+novelty-quota check is skipped (nothing to enforce yet), so treat it as
+prompt-level self-enforcement until the log fills up.
 
 1. **Queue depth** — at least 3 experiments with `status: proposed` that are
    launchable right now. Ideas blocked on time/data get `status: deferred`
@@ -41,8 +45,31 @@ dispatch history to check it against, so you must self-enforce it:
    mode); zero or more than one both violate this. (mechanically checked)
 3. **Exploration** — PATHS.md lists at least one `unexplored` or `active`
    avenue (mechanically checked), and at least every 5th experiment you
-   dispatch must open an `unexplored` avenue (novelty quota — prompt-level
-   only, not mechanically checked).
+   dispatch must open an `unexplored` avenue (novelty quota — mechanically
+   checked once `.autodev/dispatch_log` has >= 5 lines; see "Dispatch log"
+   below).
+
+### Dispatch log (`.autodev/dispatch_log`)
+
+Append-only, one line per dispatch, tab-separated:
+
+```
+<iteration>\t<experiment-id>\t<avenue>\t<opened-unexplored: yes|no>
+```
+
+- `<iteration>` — the iteration counter at dispatch time.
+- `<experiment-id>` — the ledger ID you just marked `running` (e.g. `EXP-014`).
+- `<avenue>` — the PATHS.md avenue name it belongs to.
+- `<opened-unexplored: yes|no>` — literally `yes` if, immediately before this
+  dispatch, that avenue's PATHS.md status was `unexplored` (i.e. this
+  dispatch is the one opening it); `no` otherwise.
+
+You MUST append one line here every time you complete step 5 ("Dispatch")
+of the loop, below — this is what makes the novelty quota mechanically
+enforceable. Never fake the `yes`/`no` field to satisfy the hook; that is
+exactly the kind of gaming the audit exists to catch. Once the log holds
+>= 5 lines, the hook checks the LAST 5 for at least one `yes` and blocks
+with `NOVELTY-QUOTA-VIOLATION` if none is found.
 
 ## Arguments
 
@@ -145,6 +172,9 @@ compaction.
    verification command, and what evidence to return. Sequential mode:
    exactly one experiment in flight at a time. (The ledger format supports
    parallel dispatch; do not use it unless the user changes the mode.)
+   Then append one line to `.autodev/dispatch_log` (format above) recording
+   this dispatch — this is what makes the novelty quota mechanically
+   checkable; do not skip it.
 6. **Journal** — append one entry to JOURNAL.md: iteration number, what was
    evaluated/decided/dispatched, invariant status.
 7. **Check the gate** (bounded mode only — including the branch taken from

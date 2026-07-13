@@ -348,6 +348,73 @@ EOF
   report "valid COMPLETE + continuous -> COMPLETE-INVALID, COMPLETE deleted, session stays ACTIVE" "$ok"
 }
 
+# ---- scenario 12: dispatch_log with < 5 lines, none opened unexplored -----
+# (nothing enforced yet regardless of content)
+{
+  dir=$(new_scenario_dir "12-dispatch-log-under-5")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  printf '1\tEXP-001\tAvenue A\topened-unexplored: no\n2\tEXP-002\tAvenue A\topened-unexplored: no\n3\tEXP-003\tAvenue B\topened-unexplored: no\n4\tEXP-004\tAvenue B\topened-unexplored: no\n' > "$dir/.autodev/dispatch_log"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "Invariants hold" || ok=1
+  assert_not_contains "reason" "$HOOK_STDOUT" "NOVELTY-QUOTA-VIOLATION" || ok=1
+  report "dispatch_log with 4 lines, none opened unexplored -> not enforced yet" "$ok"
+}
+
+# ---- scenario 13: dispatch_log with exactly 5 lines, none opened unexplored
+{
+  dir=$(new_scenario_dir "13-dispatch-log-5-none")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  printf '1\tEXP-001\tAvenue A\topened-unexplored: no\n2\tEXP-002\tAvenue A\topened-unexplored: no\n3\tEXP-003\tAvenue B\topened-unexplored: no\n4\tEXP-004\tAvenue B\topened-unexplored: no\n5\tEXP-005\tAvenue B\topened-unexplored: no\n' > "$dir/.autodev/dispatch_log"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "NOVELTY-QUOTA-VIOLATION" || ok=1
+  report "dispatch_log with 5 lines, none opened unexplored -> NOVELTY-QUOTA-VIOLATION" "$ok"
+}
+
+# ---- scenario 14: dispatch_log with exactly 5 lines, exactly one opened ---
+{
+  dir=$(new_scenario_dir "14-dispatch-log-5-one")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  printf '1\tEXP-001\tAvenue A\topened-unexplored: no\n2\tEXP-002\tAvenue A\topened-unexplored: no\n3\tEXP-003\tAvenue B\topened-unexplored: yes\n4\tEXP-004\tAvenue B\topened-unexplored: no\n5\tEXP-005\tAvenue B\topened-unexplored: no\n' > "$dir/.autodev/dispatch_log"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "Invariants hold" || ok=1
+  assert_not_contains "reason" "$HOOK_STDOUT" "NOVELTY-QUOTA-VIOLATION" || ok=1
+  report "dispatch_log with 5 lines, one opened unexplored -> no violation" "$ok"
+}
+
+# ---- scenario 15: > 5 lines, only last 5 matter (old violation ignored) ---
+{
+  dir=$(new_scenario_dir "15-dispatch-log-only-last-5")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  # First 3 lines (part of the older history) have zero "yes" among them,
+  # but they fall outside the last-5 window, so they must not cause a
+  # false violation as long as the last 5 contain at least one "yes".
+  printf '1\tEXP-001\tAvenue A\topened-unexplored: no\n2\tEXP-002\tAvenue A\topened-unexplored: no\n3\tEXP-003\tAvenue A\topened-unexplored: no\n4\tEXP-004\tAvenue B\topened-unexplored: no\n5\tEXP-005\tAvenue B\topened-unexplored: no\n6\tEXP-006\tAvenue B\topened-unexplored: yes\n7\tEXP-007\tAvenue B\topened-unexplored: no\n8\tEXP-008\tAvenue B\topened-unexplored: no\n' > "$dir/.autodev/dispatch_log"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "Invariants hold" || ok=1
+  assert_not_contains "reason" "$HOOK_STDOUT" "NOVELTY-QUOTA-VIOLATION" || ok=1
+  report "dispatch_log with 8 lines, only last 5 evaluated (one 'yes' at line 6) -> no violation" "$ok"
+}
+
 # ---- summary ----------------------------------------------------------------
 total=$((pass_count + fail_count))
 echo ""
