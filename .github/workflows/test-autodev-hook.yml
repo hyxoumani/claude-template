@@ -1,0 +1,21 @@
+name: Test autodev stop guard hook
+
+on:
+  push:
+    paths:
+      - '.claude/hooks/**'
+      - '.github/workflows/test-autodev-hook.yml'
+  pull_request:
+    paths:
+      - '.claude/hooks/**'
+      - '.github/workflows/test-autodev-hook.yml'
+
+jobs:
+  test-stop-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run autodev-stop-guard regression tests
+        run: bash .claude/hooks/test-autodev-stop-guard.sh
