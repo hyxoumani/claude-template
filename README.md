@@ -24,7 +24,11 @@ format supports parallel dispatch later).
 
 **Worker** (`.claude/agents/autodev-agent.md`) — merged analyst/developer.
 Receives one experiment brief, investigates, implements with tests, runs
-verification, and reports back with evidence. Never spawns subagents.
+verification, and reports back with evidence. Never spawns subagents. Full
+detail (diffs, command output) goes to `.autodev/reports/<ID>.md`; the
+final message the orchestrator actually sees is a contracted, under-150-word
+summary (verdict/files/tests/risks) — this is what keeps the orchestrator's
+own context from filling up with every agent's full output.
 
 **Enforcement** (`.claude/hooks/autodev-stop-guard.sh`, registered in
 `.claude/settings.json`) — a Stop hook, the same mechanism as Anthropic's
@@ -38,6 +42,11 @@ avenue left in `PATHS.md` is an EXPLORATION-VIOLATION. Parsing is
 block-anchored — each ledger/paths entry's own first `- status:` line,
 never a raw grep over the whole file. "Always investigating new paths" is
 a machine-checked invariant, not an instruction the model can drift from.
+When every invariant already holds and `.autodev/RUNNING_SINCE` shows the
+one running experiment was dispatched recently (< 30 min), the hook lets
+the turn end silently instead of forcing a "keep going" nudge — there's a
+genuinely in-flight agent, so waiting for it isn't idling. A missing/stale
+`RUNNING_SINCE` still blocks with a stale-dispatch check.
 
 **Goal modes** — at kickoff the goal is classified `bounded` (real finish
 line) or `continuous` (open-ended: "keep improving", "maximize X"; the
@@ -69,9 +78,12 @@ time, and agents never spawn agents.
 | `GOAL.md` | Goal + copied standing rules + acceptance criteria (bounded) or standing obligations (continuous); immutable after kickoff |
 | `PATHS.md` | Exploration frontier: every investigation avenue, `unexplored/active/exhausted` (exhausted requires cited evidence) |
 | `EXPERIMENTS.md` | Ledger: hypothesis, rationale, status, outcome evidence per experiment; audited by the hook |
+| `EXPERIMENTS-archive.md` | Concluded (`validated`/`rejected`) blocks relocated out of the live ledger once it grows large — never deleted, just moved; the hook never reads this file |
 | `JOURNAL.md` | Append-only iteration log; survives context compaction and crashes |
 | `library/` | One brief per concluded experiment (dates, verdict, how it went, lessons); append-only institutional memory that persists across sessions |
+| `reports/` | One full-detail report per agent dispatch (`<EXPERIMENT-ID>.md`), written by the agent itself — the one file agents may write under `.autodev/`; the orchestrator reads it only when the contracted summary isn't enough |
 | `ACTIVE` | Marker: session in progress — the Stop hook blocks exit while it exists |
+| `RUNNING_SINCE` | Unix timestamp of the current dispatch; lets the hook trust an agent is genuinely in flight and allow a quiet turn-end instead of a busywork nudge |
 | `COMPLETE` | Written only when the completion gate passes; must contain the three literal marker lines above or the hook treats it as invalid; valid + bounded mode is what lets the hook allow exit |
 | `iteration_count` | Blocked-stop counter, logging only |
 

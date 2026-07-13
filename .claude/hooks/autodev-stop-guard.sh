@@ -38,12 +38,25 @@
 #                The only exits are the user interrupting the session or an
 #                explicitly user-requested /autodev stop (removes ACTIVE).
 #
+# Quiet-wait exception: if ALL invariants above hold (queue/dispatch/
+# exploration/novelty), the running experiment IS the exactly-one required
+# by the dispatch invariant, and .autodev/RUNNING_SINCE shows it was
+# dispatched within the last STALE_SECONDS, the hook allows a SILENT turn-
+# end (no block, no output) instead of manufacturing a "keep going" nudge.
+# This is not idling: there is a genuinely in-flight agent, and the async
+# agent-completion notification (or any other real event) re-engages the
+# loop when there's actually something to do. If RUNNING_SINCE is missing/
+# stale (agent may have died silently, or the orchestrator forgot to
+# record it), the hook still blocks with a STALE-DISPATCH-CHECK nudge
+# rather than staying quiet indefinitely.
+#
 # There is deliberately NO iteration cap.
 
 set -u
 
 STATE_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/.autodev"
 MIN_PROPOSED=3
+STALE_SECONDS=$((30 * 60))
 
 # No active session -> allow stopping normally.
 if [[ ! -f "$STATE_DIR/ACTIVE" ]]; then
@@ -204,7 +217,19 @@ fi
 if [[ -n "$violations" ]]; then
   directive="Fix the named violations this iteration, then continue the loop."
 else
-  directive="Invariants hold. Continue the loop: evaluate any returned results (keep/revert with evidence, file a library brief), refresh PATHS.md, propose, and keep exactly one experiment running."
+  # All invariants hold, which (given the dispatch check above) means
+  # exactly one experiment is 'status: running'. Check whether it's
+  # freshly dispatched enough to trust that an agent is genuinely working
+  # on it — if so, allow a silent quiet-wait instead of forcing busywork.
+  running_since_raw=$(cat "$STATE_DIR/RUNNING_SINCE" 2>/dev/null || echo "")
+  running_since=0
+  [[ "$running_since_raw" =~ ^[0-9]+$ ]] && running_since="$running_since_raw"
+  now=$(date +%s)
+  elapsed=$(( now - running_since ))
+  if (( running_since > 0 && elapsed < STALE_SECONDS )); then
+    exit 0
+  fi
+  directive="STALE-DISPATCH-CHECK: the one running experiment's .autodev/RUNNING_SINCE is missing or older than $((STALE_SECONDS / 60)) minutes. Confirm the dispatched agent is genuinely still working — if it silently failed, crashed, or was never actually dispatched, fix the ledger (redispatch or demote) and record a fresh RUNNING_SINCE. If it's legitimately still running, touch .autodev/RUNNING_SINCE again (date +%s > .autodev/RUNNING_SINCE) and continue waiting."
 fi
 
 reason="AUTODEV ENFORCEMENT (iteration $count, mode $MODE): session ACTIVE — you may not stop. ${violations}${directive} Always be investigating: waiting on time or data is never a reason to idle; generating new hypotheses is itself the job. Never weaken GOAL.md, never fake ledger statuses to satisfy this audit."
