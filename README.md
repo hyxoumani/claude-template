@@ -10,7 +10,7 @@ that **cannot stop** until the goal is verifiably complete.
 ```
 /autodev <goal>     # start a session — the loop runs until genuinely done
 /autodev resume     # continue an interrupted session from .autodev/ state
-/autodev status     # inspect session state without entering the loop
+/autodev status     # report session state; only truly "stops" if no session is ACTIVE — otherwise the loop continues right after
 /autodev stop       # manual abort (the only sanctioned early exit)
 ```
 
@@ -30,10 +30,14 @@ verification, and reports back with evidence. Never spawns subagents.
 `.claude/settings.json`) — a Stop hook, the same mechanism as Anthropic's
 Ralph Wiggum plugin. While `.autodev/ACTIVE` exists, the harness blocks
 every attempt by the agent to end its turn — and the hook **audits the
-ledger** on each attempt, naming violations in its block message: fewer
-than 3 launchable `proposed` experiments is a QUEUE-VIOLATION; zero
-`running` is a DISPATCH-VIOLATION. "Always investigating new paths" is a
-machine-checked invariant, not an instruction the model can drift from.
+ledger and paths map** on each attempt, naming violations in its block
+message: fewer than 3 launchable `proposed` experiments is a
+QUEUE-VIOLATION; anything other than exactly 1 `running` experiment (zero
+or more than one) is a DISPATCH-VIOLATION; and no `unexplored`/`active`
+avenue left in `PATHS.md` is an EXPLORATION-VIOLATION. Parsing is
+block-anchored — each ledger/paths entry's own first `- status:` line,
+never a raw grep over the whole file. "Always investigating new paths" is
+a machine-checked invariant, not an instruction the model can drift from.
 
 **Goal modes** — at kickoff the goal is classified `bounded` (real finish
 line) or `continuous` (open-ended: "keep improving", "maximize X"; the
@@ -43,10 +47,14 @@ the user can end the session.
 
 **Completion gate (bounded mode)** — `COMPLETE` may be written only when
 every acceptance criterion in `GOAL.md` is met with evidence, full
-verification passed in that same iteration, a **red-team agent** attacked
-the completion claim and came back empty-handed, and a rationale is
-journaled — in which "remaining work is blocked on time/data" is never
-admissible.
+verification passed in that same iteration, a **red-team review** —
+tracked in the ledger as its own `RT-<N>` pseudo-experiment — attacked the
+completion claim and came back empty-handed, and a rationale is journaled
+— in which "remaining work is blocked on time/data" is never admissible.
+`COMPLETE` itself is a structured attestation, not a bare marker: the hook
+greps it for three literal lines (`VERIFICATION: PASS`,
+`RED_TEAM: EMPTY_HANDED`, `ACCEPTANCE_CRITERIA: MET`) and treats it as
+invalid — naming the missing marker(s) — if any is absent.
 
 **Safety** — there is deliberately no iteration cap. Manual stops only:
 interrupt the session (Esc/Ctrl+C) or run `/autodev stop`. Runaway-spawn
@@ -64,7 +72,7 @@ time, and agents never spawn agents.
 | `JOURNAL.md` | Append-only iteration log; survives context compaction and crashes |
 | `library/` | One brief per concluded experiment (dates, verdict, how it went, lessons); append-only institutional memory that persists across sessions |
 | `ACTIVE` | Marker: session in progress — the Stop hook blocks exit while it exists |
-| `COMPLETE` | Written only when the completion gate passes; the hook then allows exit |
+| `COMPLETE` | Written only when the completion gate passes; must contain the three literal marker lines above or the hook treats it as invalid; valid + bounded mode is what lets the hook allow exit |
 | `iteration_count` | Blocked-stop counter, logging only |
 
 Because all state is in files, a crashed or closed session loses nothing —
