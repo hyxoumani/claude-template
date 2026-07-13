@@ -2,9 +2,20 @@
 # Stop-hook guard for the /autodev skill.
 #
 # While an autodev session is ACTIVE, this hook blocks the agent from ending
-# its turn AND audits the experiment ledger for keep-working invariants:
-#   - queue depth:  >= MIN_PROPOSED experiments with "status: proposed"
-#   - dispatch:     >= 1 experiment with "status: running"
+# its turn AND audits the experiment ledger and paths map for keep-working
+# invariants. Each EXPERIMENTS.md/PATHS.md block (starting with a `## `
+# header line) is parsed separately, taking only its OWN first `- status:`
+# line — occurrences of the word "status:" elsewhere (prose, notes, quoted
+# examples, code fences) are never counted. Mechanically checked:
+#   - queue depth:  >= MIN_PROPOSED experiment blocks whose own status line
+#                    is "status: proposed"
+#   - dispatch:     exactly 1 experiment block whose own status line is
+#                    "status: running" (0 and >1 are both violations)
+#   - exploration:  PATHS.md has >= 1 avenue block whose own status line is
+#                    "unexplored" or "active"
+# NOT mechanically checked (prompt-level only): the novelty quota ("every
+# 5th dispatch opens an unexplored avenue") — that requires dispatch-history
+# tracking this hook does not keep.
 # Violations are named explicitly in the block reason every iteration.
 #
 # Modes (.autodev/MODE):
@@ -26,17 +37,61 @@ if [[ ! -f "$STATE_DIR/ACTIVE" ]]; then
   exit 0
 fi
 
-MODE=$(cat "$STATE_DIR/MODE" 2>/dev/null || echo bounded)
+MODE_RAW=$(cat "$STATE_DIR/MODE" 2>/dev/null)
+# Trim leading/trailing whitespace (incl. trailing newline) and require an
+# exact match — anything else (missing file, empty, garbled, extra text)
+# is invalid and must NEVER be silently treated as "bounded".
+MODE=$(printf '%s' "$MODE_RAW" | tr -d '[:space:]')
 
+if [[ "$MODE" != "bounded" && "$MODE" != "continuous" ]]; then
+  reason="AUTODEV ENFORCEMENT: MODE-INVALID: .autodev/MODE must contain exactly 'bounded' or 'continuous' (found: '${MODE_RAW}'). This is fail-closed — an invalid/missing/garbled MODE file is never treated as bounded. Fix MODE before this session can exit, and continue the loop."
+  python3 - "$reason" <<'PYEOF' 2>/dev/null || printf '{"decision": "block", "reason": "AUTODEV ENFORCEMENT: MODE-INVALID: .autodev/MODE must be exactly bounded or continuous."}\n'
+import json, sys
+print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
+PYEOF
+  exit 0
+fi
+
+# A well-formed completion attestation requires ALL of these labeled
+# markers to be present in COMPLETE (grep-able, not just file existence) —
+# see the /autodev skill's "Completion gate" section for what each attests.
+required_markers=("VERIFICATION: PASS" "RED_TEAM: EMPTY_HANDED" "ACCEPTANCE_CRITERIA: MET")
+
+complete_present=0
+complete_valid=0
+missing_markers=""
 if [[ -f "$STATE_DIR/COMPLETE" ]]; then
+  complete_present=1
+  complete_valid=1
+  for marker in "${required_markers[@]}"; do
+    if ! grep -qF "$marker" "$STATE_DIR/COMPLETE" 2>/dev/null; then
+      complete_valid=0
+      missing_markers+="'${marker}' "
+    fi
+  done
+fi
+
+if [[ "$complete_present" -eq 1 ]]; then
   if [[ "$MODE" == "continuous" ]]; then
     # Self-termination is mechanically impossible in continuous mode.
     rm -f "$STATE_DIR/COMPLETE"
     complete_violation="COMPLETE-INVALID: this session is MODE=continuous — it has no finish line and COMPLETE is never honored (the hook just deleted it; do not recreate it). The goal is a standing obligation; only the user can end this session. "
-  else
+  elif [[ "$complete_valid" -eq 1 ]]; then
     # Bounded mode: completion gate passed -> allow stopping, retire ACTIVE.
     rm -f "$STATE_DIR/ACTIVE"
+    if [[ -f "$STATE_DIR/ACTIVE" ]]; then
+      reason="AUTODEV ENFORCEMENT: ACTIVE-REMOVAL-FAILED: rm -f .autodev/ACTIVE did not remove the file (permission or filesystem error). The session cannot be confirmed retired, so it may not exit. Investigate and retry."
+      python3 - "$reason" <<'PYEOF' 2>/dev/null || printf '{"decision": "block", "reason": "AUTODEV ENFORCEMENT: ACTIVE-REMOVAL-FAILED: could not remove .autodev/ACTIVE."}\n'
+import json, sys
+print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
+PYEOF
+      exit 0
+    fi
     exit 0
+  else
+    # COMPLETE exists but is missing required markers -> treat as if it
+    # didn't exist, and name exactly what's missing.
+    complete_violation="COMPLETE-INVALID: .autodev/COMPLETE is missing required marker(s): ${missing_markers}(need all of VERIFICATION: PASS, RED_TEAM: EMPTY_HANDED, ACCEPTANCE_CRITERIA: MET). A bare/incomplete COMPLETE file is never honored — rewrite it per the completion gate in the /autodev skill, or continue the loop if the gate isn't actually satisfied yet. "
   fi
 else
   complete_violation=""
@@ -48,17 +103,41 @@ count=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)
 count=$((count + 1))
 echo "$count" > "$COUNT_FILE"
 
+# Parse a ledger/paths-map file into one line per top-level block (lines
+# starting with "## "), each line being that block's own first
+# "- status: ..." line (or nothing, if the block has none). Occurrences of
+# "status:" elsewhere in the block (prose, notes, code fences) are ignored
+# because only the FIRST match after each "## " header, before the next
+# one, is taken.
+block_statuses() {
+  awk '
+    /^## / { if (in_block && status != "") print status; in_block=1; status=""; next }
+    in_block && status == "" && /^- status:/ { status=$0 }
+    END { if (in_block && status != "") print status }
+  ' "$1" 2>/dev/null
+}
+
 # ---- Ledger audit -----------------------------------------------------------
 LEDGER="$STATE_DIR/EXPERIMENTS.md"
-proposed=$(grep -c 'status: proposed' "$LEDGER" 2>/dev/null) || proposed=0
-running=$(grep -c 'status: running' "$LEDGER" 2>/dev/null) || running=0
+ledger_statuses=$(block_statuses "$LEDGER")
+proposed=$(printf '%s\n' "$ledger_statuses" | grep -c 'status: proposed')
+running=$(printf '%s\n' "$ledger_statuses" | grep -c 'status: running')
 
 violations="$complete_violation"
 if (( proposed < MIN_PROPOSED )); then
   violations+="QUEUE-VIOLATION: only $proposed 'status: proposed' experiments in EXPERIMENTS.md (minimum $MIN_PROPOSED). Refill the queue NOW with new, unblocked hypotheses — consult PATHS.md for unexplored avenues; wall-clock-blocked ideas must be 'status: deferred' and do not count. "
 fi
 if (( running == 0 )); then
-  violations+="DISPATCH-VIOLATION: no experiment has 'status: running'. Pick the highest-expected-value proposal, mark it running, and dispatch an autodev-agent NOW. "
+  violations+="DISPATCH-VIOLATION: no experiment has 'status: running' (expected exactly 1). Pick the highest-expected-value proposal, mark it running, and dispatch an autodev-agent NOW. "
+elif (( running > 1 )); then
+  violations+="DISPATCH-VIOLATION: $running experiments running simultaneously, expected exactly 1 (sequential mode). Demote all but one back to 'status: proposed' or conclude them before continuing. "
+fi
+
+# ---- Exploration audit ------------------------------------------------------
+PATHS_FILE="$STATE_DIR/PATHS.md"
+paths_statuses=$(block_statuses "$PATHS_FILE")
+if ! printf '%s\n' "$paths_statuses" | grep -qE 'status: (unexplored|active)'; then
+  violations+="EXPLORATION-VIOLATION: PATHS.md has no avenue with 'status: unexplored' or 'status: active'. Open a new avenue now — 'waiting for time/data' is never a reason to have zero open avenues. "
 fi
 
 if [[ -n "$violations" ]]; then
