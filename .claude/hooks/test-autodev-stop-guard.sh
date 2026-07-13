@@ -195,6 +195,40 @@ EOF
   report "3 proposed + 1 running + 1 active avenue -> Invariants hold, no violations" "$ok"
 }
 
+# ---- scenario 4a: exactly 2 proposed (below MIN_PROPOSED=3) -> QUEUE-VIOLATION
+# Boundary case: running=1 and PATHS.md valid held constant vs scenario 4,
+# only the proposed-count changes (3 -> 2), to pin down the exact cutover.
+{
+  dir=$(new_scenario_dir "04a-queue-boundary-2-proposed")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 2 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "QUEUE-VIOLATION" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "only 2 'status: proposed' experiments" || ok=1
+  report "exactly 2 proposed (< MIN_PROPOSED) -> QUEUE-VIOLATION" "$ok"
+}
+
+# ---- scenario 4b: exactly 3 proposed (== MIN_PROPOSED) -> no QUEUE-VIOLATION
+# Same setup as 4a but with proposed=3, the precise cutover point: nothing
+# between 2 and 3 exists to test, so this pair pins down < vs <= exactly.
+{
+  dir=$(new_scenario_dir "04b-queue-boundary-3-proposed")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_not_contains "reason" "$HOOK_STDOUT" "QUEUE-VIOLATION" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "Invariants hold" || ok=1
+  report "exactly 3 proposed (== MIN_PROPOSED) -> no QUEUE-VIOLATION" "$ok"
+}
+
 # ---- scenario 5: anchoring — own status wins over prose substring ---------
 {
   dir=$(new_scenario_dir "05-anchoring")
