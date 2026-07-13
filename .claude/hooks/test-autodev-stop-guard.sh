@@ -333,11 +333,81 @@ EOF
   report "COMPLETE missing RED_TEAM marker -> COMPLETE-INVALID naming it" "$ok"
 }
 
+# A minimal EXPERIMENTS.md fragment representing a genuinely validated,
+# empty-handed RT-<N> red-team review block, in canonical field order.
+validated_rt_block() {
+  cat <<'EOF'
+## RT-1: red-team review of completion claim
+- status: validated
+- path: red-team-review
+- outcome: empty-handed — no unblocked positive-EV experiment found.
+
+EOF
+}
+
+# ---- scenario 9b: COMPLETE has all 3 markers but NO RT-<N> entry at all ---
+{
+  dir=$(new_scenario_dir "09b-complete-no-rt-entry")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "COMPLETE-INVALID" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "no validated RT-<N> red-team-review ledger entry" || ok=1
+  if [[ ! -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE was removed even though no RT-<N> ledger entry exists"
+    ok=1
+  fi
+  report "COMPLETE with all 3 markers but no RT-<N> ledger entry at all -> COMPLETE-INVALID" "$ok"
+}
+
+# ---- scenario 9c: COMPLETE has all 3 markers, RT-<N> entry still running --
+{
+  dir=$(new_scenario_dir "09c-complete-rt-still-running")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  extra="## RT-1: red-team review of completion claim
+- status: running
+- path: red-team-review
+Dispatched to an autodev-agent, not yet evaluated.
+
+"
+  canonical_ledger 3 "$extra" > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "COMPLETE-INVALID" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "no validated RT-<N> red-team-review ledger entry" || ok=1
+  # This also causes 2 blocks running (R1 + RT-1) simultaneously, which is
+  # itself a legitimate DISPATCH-VIOLATION and does not undermine the point:
+  # COMPLETE must still be rejected regardless.
+  if [[ ! -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE was removed even though RT-<N> entry is still running"
+    ok=1
+  fi
+  report "COMPLETE with all 3 markers, RT-<N> entry still 'status: running' -> COMPLETE-INVALID" "$ok"
+}
+
 # ---- scenario 10: valid COMPLETE, bounded -> exit 0, ACTIVE removed -------
 {
   dir=$(new_scenario_dir "10-valid-complete-bounded")
   touch "$dir/.autodev/ACTIVE"
   printf 'bounded' > "$dir/.autodev/MODE"
+  validated_rt_block > "$dir/.autodev/EXPERIMENTS.md"
   cat > "$dir/.autodev/COMPLETE" <<'EOF'
 VERIFICATION: PASS
 RED_TEAM: EMPTY_HANDED
@@ -351,7 +421,36 @@ EOF
     echo "    FAIL detail: ACTIVE still present after valid bounded COMPLETE"
     ok=1
   fi
-  report "valid COMPLETE + bounded -> silent exit 0, ACTIVE actually removed" "$ok"
+  report "valid COMPLETE + bounded + validated RT-<N> ledger entry -> silent exit 0, ACTIVE actually removed" "$ok"
+}
+
+# ---- scenario 10b: valid COMPLETE, bounded, RT-<N> field order varied ----
+# path: before status: (field order should not matter -- only each field's
+# OWN first occurrence within the block, order-independent).
+{
+  dir=$(new_scenario_dir "10b-valid-complete-rt-field-order")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  cat > "$dir/.autodev/EXPERIMENTS.md" <<'EOF'
+## RT-2: red-team review of completion claim
+- path: red-team-review
+- status: validated
+- outcome: empty-handed — no unblocked positive-EV experiment found.
+EOF
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_eq "stdout" "" "$HOOK_STDOUT" || ok=1
+  if [[ -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE still present after valid bounded COMPLETE (path-before-status order)"
+    ok=1
+  fi
+  report "valid COMPLETE + RT-<N> with path-before-status field order -> still recognized as valid" "$ok"
 }
 
 # ---- scenario 11: valid COMPLETE, continuous -> blocked, COMPLETE deleted -

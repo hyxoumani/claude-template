@@ -251,10 +251,17 @@ ACCEPTANCE_CRITERIA: MET
 ```
 
 Alongside those three required lines, include a one-paragraph summary and
-the verification command output for a human reader. If any token is
-missing or misspelled, the hook treats COMPLETE as invalid (same as if it
-didn't exist) and blocks, naming exactly which marker(s) are missing —
-rewrite the file rather than touching an empty one.
+the verification command output for a human reader. The three literal
+marker strings are NOT sufficient by themselves, though: the hook ALSO
+cross-references EXPERIMENTS.md and requires at least one block whose
+header matches `## RT-<N>` to have its own `- path: red-team-review` line
+AND its own `- status: validated` line — i.e. a real, ledger-tracked,
+empty-handed red-team review must actually exist, not just be claimed via
+the RED_TEAM marker text. If any of the three tokens is missing/
+misspelled, OR no such validated `RT-<N>` ledger entry exists, the hook
+treats COMPLETE as invalid (same as if it didn't exist) and blocks,
+naming exactly what's missing — rewrite the file (and/or finish the RT-<N>
+ledger entry) rather than touching an empty COMPLETE.
 
 Then end your turn — the hook will allow it and retire the ACTIVE marker
 (and will re-block if it cannot confirm ACTIVE was actually removed). If

@@ -26,7 +26,12 @@
 #
 # Modes (.autodev/MODE):
 #   bounded    - COMPLETE marker (written only after the skill's completion
-#                gate, incl. red-team review) allows exit.
+#                gate, incl. red-team review) allows exit. Validity requires
+#                BOTH the 3 literal COMPLETE markers AND a real, ledger-
+#                tracked, `validated` `## RT-<N>` (`path: red-team-review`)
+#                block in EXPERIMENTS.md — the literal RED_TEAM marker text
+#                alone is never sufficient (a hand-written COMPLETE with no
+#                actual red-team ledger entry is rejected as invalid).
 #   continuous - COMPLETE is INVALID: the hook deletes it and blocks anyway.
 #                The only exits are the user interrupting the session or an
 #                explicitly user-requested /autodev stop (removes ACTIVE).
@@ -61,6 +66,10 @@ fi
 # A well-formed completion attestation requires ALL of these labeled
 # markers to be present in COMPLETE (grep-able, not just file existence) —
 # see the /autodev skill's "Completion gate" section for what each attests.
+# The literal RED_TEAM marker alone is NOT sufficient evidence a real
+# red-team review happened, though: it also cross-checks EXPERIMENTS.md for
+# an actual `## RT-<N>` ledger block (`path: red-team-review`, own status
+# line `validated`) below.
 required_markers=("VERIFICATION: PASS" "RED_TEAM: EMPTY_HANDED" "ACCEPTANCE_CRITERIA: MET")
 
 complete_present=0
@@ -75,6 +84,28 @@ if [[ -f "$STATE_DIR/COMPLETE" ]]; then
       missing_markers+="'${marker}' "
     fi
   done
+
+  # Cross-check the ledger: require a real, ledger-tracked red-team review,
+  # not just the literal marker text. A block qualifies only if its OWN
+  # header matches `## RT-<N>`, its own first `- path:` line is exactly
+  # `- path: red-team-review`, and its own first `- status:` line is
+  # exactly `- status: validated` (empty-handed).
+  rt_ledger_valid=$(awk '
+    function block_ok() {
+      return (header ~ /^## RT-[0-9]+/ && status == "- status: validated" && path == "- path: red-team-review")
+    }
+    /^## / {
+      if (in_block && block_ok()) { found = 1 }
+      in_block = 1; header = $0; status = ""; path = ""; next
+    }
+    in_block && status == "" && /^- status:/ { status = $0 }
+    in_block && path == "" && /^- path:/ { path = $0 }
+    END { if (in_block && block_ok()) { found = 1 }; print (found ? "yes" : "no") }
+  ' "$STATE_DIR/EXPERIMENTS.md" 2>/dev/null)
+  if [[ "$rt_ledger_valid" != "yes" ]]; then
+    complete_valid=0
+    missing_markers+="[no validated RT-<N> red-team-review ledger entry found in EXPERIMENTS.md — need a '## RT-<N>' block with its own '- path: red-team-review' and '- status: validated' lines] "
+  fi
 fi
 
 if [[ "$complete_present" -eq 1 ]]; then
@@ -97,7 +128,7 @@ PYEOF
   else
     # COMPLETE exists but is missing required markers -> treat as if it
     # didn't exist, and name exactly what's missing.
-    complete_violation="COMPLETE-INVALID: .autodev/COMPLETE is missing required marker(s): ${missing_markers}(need all of VERIFICATION: PASS, RED_TEAM: EMPTY_HANDED, ACCEPTANCE_CRITERIA: MET). A bare/incomplete COMPLETE file is never honored — rewrite it per the completion gate in the /autodev skill, or continue the loop if the gate isn't actually satisfied yet. "
+    complete_violation="COMPLETE-INVALID: .autodev/COMPLETE is missing required marker(s)/evidence: ${missing_markers}(need all of VERIFICATION: PASS, RED_TEAM: EMPTY_HANDED, ACCEPTANCE_CRITERIA: MET, PLUS a validated RT-<N> red-team-review ledger entry in EXPERIMENTS.md). A bare/incomplete COMPLETE file, or the 3 marker strings without a real ledger-tracked red-team review, is never honored — rewrite it per the completion gate in the /autodev skill, or continue the loop if the gate isn't actually satisfied yet. "
   fi
 else
   complete_violation=""
