@@ -501,6 +501,31 @@ EOF
   report "valid COMPLETE + RT-<N> with path-before-status field order -> still recognized as valid" "$ok"
 }
 
+# ---- scenario 10e: valid COMPLETE, RT-<N> lines have trailing whitespace/CR
+# CodeRabbit-flagged brittleness: exact-string equality would reject a
+# validated RT-<N> block forever if its lines carry trailing spaces (e.g.
+# markdown's "two trailing spaces = line break" convention) or a stray CR.
+{
+  dir=$(new_scenario_dir "10e-valid-complete-rt-trailing-whitespace")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  printf '## RT-1: red-team review of completion claim\n- status: validated  \r\n- path: red-team-review \n- outcome: empty-handed.\n' > "$dir/.autodev/EXPERIMENTS.md"
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_eq "stdout" "" "$HOOK_STDOUT" || ok=1
+  if [[ -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE still present after valid RT-<N> with trailing whitespace/CR"
+    ok=1
+  fi
+  report "valid RT-<N> with trailing whitespace/CR on status/path lines -> still recognized as valid" "$ok"
+}
+
 # ---- scenario 10c: stale earlier-validated RT-<N>, newer RT-<N> not validated
 # The exact CodeRabbit-flagged gap: RT-1 was validated, but a newer RT-2 was
 # later dispatched (e.g. because new experiments/avenues were added) and is

@@ -50,7 +50,21 @@
 # record it), the hook still blocks with a STALE-DISPATCH-CHECK nudge
 # rather than staying quiet indefinitely.
 #
-# There is deliberately NO iteration cap.
+# There is deliberately NO iteration cap. Claude Code itself defaults to
+# capping consecutive Stop-hook blocks at 8 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP)
+# and would silently override this hook and force-terminate the session once
+# hit — that default is disabled via `env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "0"`
+# in `.claude/settings.json`, which is required alongside this hook for the
+# "no cap" design to actually hold.
+#
+# This hook deliberately does NOT read stdin for the `stop_hook_active` flag
+# to early-exit on a "repeat fire," despite that being generic best practice
+# for most Stop hooks. Blocking repeatedly IS this hook's entire purpose (the
+# loop is meant to re-block every single attempt until the completion gate or
+# the user ends it) — honoring `stop_hook_active` the generic way would let
+# the session end on the very next attempt after any block, defeating the
+# point. The block-cap env var above is the correct way to keep this
+# unbounded safely, rather than parsing stdin here.
 
 set -u
 
@@ -106,11 +120,15 @@ if [[ -f "$STATE_DIR/COMPLETE" ]]; then
   # stops a stale, earlier validated RT-<N> from satisfying a completion
   # claim made after newer experiments/avenues were added post-review. The
   # highest-numbered RT block qualifies only if its own first `- path:`
-  # line is exactly `- path: red-team-review` and its own first
-  # `- status:` line is exactly `- status: validated` (empty-handed).
+  # line is `- path: red-team-review` and its own first `- status:` line
+  # is `- status: validated` (empty-handed) — tolerant of trailing
+  # whitespace/CR (e.g. markdown's own "two trailing spaces = line break"
+  # convention), matching how the rest of this script's ledger/paths
+  # audits already tolerate trailing content rather than requiring exact
+  # byte-for-byte equality.
   rt_ledger_valid=$(awk '
     function block_ok() {
-      return (status == "- status: validated" && path == "- path: red-team-review")
+      return (status ~ /^- status: validated[ \t\r]*$/ && path ~ /^- path: red-team-review[ \t\r]*$/)
     }
     function rt_num(h,    n) {
       n = h; sub(/^## RT-/, "", n); sub(/[^0-9].*/, "", n); return n + 0

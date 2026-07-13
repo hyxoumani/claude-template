@@ -7,7 +7,7 @@ that **cannot stop** until the goal is verifiably complete.
 
 ## Usage
 
-```
+```text
 /autodev <goal>     # start a session — the loop runs until genuinely done
 /autodev resume     # continue an interrupted session from .autodev/ state
 /autodev status     # report session state; only truly "stops" if no session is ACTIVE — otherwise the loop continues right after
@@ -65,10 +65,14 @@ greps it for three literal lines (`VERIFICATION: PASS`,
 `RED_TEAM: EMPTY_HANDED`, `ACCEPTANCE_CRITERIA: MET`) and treats it as
 invalid — naming the missing marker(s) — if any is absent.
 
-**Safety** — there is deliberately no iteration cap. Manual stops only:
-interrupt the session (Esc/Ctrl+C) or run `/autodev stop`. Runaway-spawn
-protection is structural — only the orchestrator spawns agents, one at a
-time, and agents never spawn agents.
+**Safety** — there is deliberately no iteration cap. Note Claude Code
+itself defaults to capping consecutive Stop-hook blocks at 8
+(`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) and would otherwise silently override
+this hook and force-terminate the session — `.claude/settings.json` sets
+that env var to `"0"` so the "no cap" design actually holds. Manual stops
+only: interrupt the session (Esc/Ctrl+C) or run `/autodev stop`.
+Runaway-spawn protection is structural — only the orchestrator spawns
+agents, one at a time, and agents never spawn agents.
 
 ## Session state (`.autodev/`, gitignored)
 
@@ -76,7 +80,7 @@ time, and agents never spawn agents.
 |---|---|
 | `MODE` | `bounded` or `continuous` — decides whether a completion gate exists at all |
 | `GOAL.md` | Goal + copied standing rules + acceptance criteria (bounded) or standing obligations (continuous); immutable after kickoff |
-| `PATHS.md` | Exploration frontier: every investigation avenue, `unexplored/active/exhausted` (exhausted requires cited evidence) |
+| `PATHS.md` | Exploration frontier: every investigation avenue, `unexplored/active/exhausted` (exhausted requires evidence to be cited) |
 | `EXPERIMENTS.md` | Ledger: hypothesis, rationale, status, outcome evidence per experiment; audited by the hook |
 | `EXPERIMENTS-archive.md` | Concluded (`validated`/`rejected`) blocks relocated out of the live ledger once it grows large — never deleted, just moved; the hook never reads this file |
 | `JOURNAL.md` | Append-only iteration log; survives context compaction and crashes |

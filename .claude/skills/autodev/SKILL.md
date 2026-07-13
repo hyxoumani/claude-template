@@ -167,9 +167,14 @@ compaction.
    `validated`/`rejected` blocks older than roughly a day (or simply "not
    among the most recent handful") into an append-only
    `.autodev/EXPERIMENTS-archive.md` (see Archive below) — this is a
-   relocation, not a deletion, and the hook only ever counts
-   `proposed`/`running` blocks in the live file, so archiving concluded
-   entries never affects its audit.
+   relocation, not a deletion. **NEVER archive an `RT-<N>` block, ever,
+   regardless of age**: the queue/dispatch/exploration checks only count
+   `proposed`/`running` blocks so archiving ordinary `EXP-N` entries never
+   affects them, but the completion gate's ledger cross-check (see
+   Completion gate) reads only the LIVE `EXPERIMENTS.md`, never the
+   archive — archiving a validated `RT-<N>` would silently break
+   `COMPLETE` with no obvious cause. `RT-<N>` blocks are rare (at most a
+   few per session) and cost nothing to keep live indefinitely.
 3. **Check early completion** (bounded mode only — skip this step entirely
    in continuous mode). Before proposing or dispatching anything ordinary,
    ask: does every GOAL.md acceptance criterion already hold on concluded,
@@ -358,7 +363,11 @@ to open work (`proposed`/`running`/`deferred`) plus a handful of the most
 recent concluded entries for context. This is a relocation, never a
 deletion — the full block text moves as-is; the library brief already
 preserves the durable lesson, so the archive is just a cheaper home for
-the raw ledger record.
+the raw ledger record. **Exception: never archive `RT-<N>` blocks** — the
+completion gate's hook cross-check only reads the live EXPERIMENTS.md, so
+an archived (even validated) `RT-<N>` silently breaks `COMPLETE` with no
+visible cause. Leave every `RT-<N>` block in the live file permanently;
+there are never enough of them to matter for file size.
 
 ## Library (`.autodev/library/`)
 
