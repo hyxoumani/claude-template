@@ -453,6 +453,77 @@ EOF
   report "valid COMPLETE + RT-<N> with path-before-status field order -> still recognized as valid" "$ok"
 }
 
+# ---- scenario 10c: stale earlier-validated RT-<N>, newer RT-<N> not validated
+# The exact CodeRabbit-flagged gap: RT-1 was validated, but a newer RT-2 was
+# later dispatched (e.g. because new experiments/avenues were added) and is
+# still running/unresolved. RT-1 being validated must NOT satisfy the gate;
+# only the highest-numbered block (RT-2) counts.
+{
+  dir=$(new_scenario_dir "10c-stale-earlier-validated-rt")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  cat > "$dir/.autodev/EXPERIMENTS.md" <<'EOF'
+## RT-1: red-team review of completion claim
+- status: validated
+- path: red-team-review
+- outcome: empty-handed on the state as of that iteration.
+
+## RT-2: red-team review of completion claim
+- status: running
+- path: red-team-review
+- outcome:
+EOF
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "COMPLETE-INVALID" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "highest-numbered RT-<N>" || ok=1
+  if [[ ! -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE was removed even though the highest-numbered RT-<N> (RT-2) is not validated"
+    ok=1
+  fi
+  report "stale validated RT-1 does not satisfy gate when newer RT-2 exists and isn't validated -> COMPLETE-INVALID" "$ok"
+}
+
+# ---- scenario 10d: newest RT-<N> is the validated one -> valid ------------
+# Same shape as 10c but RT-2 (the higher number) is the validated one; RT-1's
+# earlier status (rejected) is irrelevant since only the highest counts.
+{
+  dir=$(new_scenario_dir "10d-newest-rt-validated")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  cat > "$dir/.autodev/EXPERIMENTS.md" <<'EOF'
+## RT-1: red-team review of completion claim
+- status: rejected
+- path: red-team-review
+- outcome: found unblocked experiments; added to queue.
+
+## RT-2: red-team review of completion claim
+- status: validated
+- path: red-team-review
+- outcome: empty-handed — no unblocked positive-EV experiment found.
+EOF
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+RED_TEAM: EMPTY_HANDED
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_eq "stdout" "" "$HOOK_STDOUT" || ok=1
+  if [[ -f "$dir/.autodev/ACTIVE" ]]; then
+    echo "    FAIL detail: ACTIVE still present even though highest-numbered RT-2 is validated"
+    ok=1
+  fi
+  report "highest-numbered RT-2 validated (RT-1 rejected) -> valid, ACTIVE removed" "$ok"
+}
+
 # ---- scenario 11: valid COMPLETE, continuous -> blocked, COMPLETE deleted -
 {
   dir=$(new_scenario_dir "11-valid-complete-continuous")

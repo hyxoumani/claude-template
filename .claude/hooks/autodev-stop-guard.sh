@@ -27,11 +27,13 @@
 # Modes (.autodev/MODE):
 #   bounded    - COMPLETE marker (written only after the skill's completion
 #                gate, incl. red-team review) allows exit. Validity requires
-#                BOTH the 3 literal COMPLETE markers AND a real, ledger-
-#                tracked, `validated` `## RT-<N>` (`path: red-team-review`)
-#                block in EXPERIMENTS.md — the literal RED_TEAM marker text
-#                alone is never sufficient (a hand-written COMPLETE with no
-#                actual red-team ledger entry is rejected as invalid).
+#                BOTH the 3 literal COMPLETE markers AND the HIGHEST-numbered
+#                `## RT-<N>` block in EXPERIMENTS.md being `validated` with
+#                `path: red-team-review` — the literal RED_TEAM marker text
+#                alone is never sufficient, and a stale earlier-validated
+#                RT-<N> does not count if a newer RT-<N> block exists (e.g.
+#                still `running` or `rejected`): only the latest attempt can
+#                satisfy the gate.
 #   continuous - COMPLETE is INVALID: the hook deletes it and blocks anyway.
 #                The only exits are the user interrupting the session or an
 #                explicitly user-requested /autodev stop (removes ACTIVE).
@@ -86,25 +88,34 @@ if [[ -f "$STATE_DIR/COMPLETE" ]]; then
   done
 
   # Cross-check the ledger: require a real, ledger-tracked red-team review,
-  # not just the literal marker text. A block qualifies only if its OWN
-  # header matches `## RT-<N>`, its own first `- path:` line is exactly
-  # `- path: red-team-review`, and its own first `- status:` line is
-  # exactly `- status: validated` (empty-handed).
+  # not just the literal marker text. It must be the HIGHEST-numbered
+  # `## RT-<N>` block in the ledger (not just any validated one) — this
+  # stops a stale, earlier validated RT-<N> from satisfying a completion
+  # claim made after newer experiments/avenues were added post-review. The
+  # highest-numbered RT block qualifies only if its own first `- path:`
+  # line is exactly `- path: red-team-review` and its own first
+  # `- status:` line is exactly `- status: validated` (empty-handed).
   rt_ledger_valid=$(awk '
     function block_ok() {
-      return (header ~ /^## RT-[0-9]+/ && status == "- status: validated" && path == "- path: red-team-review")
+      return (status == "- status: validated" && path == "- path: red-team-review")
     }
-    /^## / {
-      if (in_block && block_ok()) { found = 1 }
-      in_block = 1; header = $0; status = ""; path = ""; next
+    function rt_num(h,    n) {
+      n = h; sub(/^## RT-/, "", n); sub(/[^0-9].*/, "", n); return n + 0
     }
+    function check_prev() {
+      if (in_block && header ~ /^## RT-[0-9]+/) {
+        n = rt_num(header)
+        if (n > maxn) { maxn = n; maxvalid = block_ok() }
+      }
+    }
+    /^## / { check_prev(); in_block = 1; header = $0; status = ""; path = ""; next }
     in_block && status == "" && /^- status:/ { status = $0 }
     in_block && path == "" && /^- path:/ { path = $0 }
-    END { if (in_block && block_ok()) { found = 1 }; print (found ? "yes" : "no") }
+    END { check_prev(); print (maxn > 0 && maxvalid ? "yes" : "no") }
   ' "$STATE_DIR/EXPERIMENTS.md" 2>/dev/null)
   if [[ "$rt_ledger_valid" != "yes" ]]; then
     complete_valid=0
-    missing_markers+="[no validated RT-<N> red-team-review ledger entry found in EXPERIMENTS.md — need a '## RT-<N>' block with its own '- path: red-team-review' and '- status: validated' lines] "
+    missing_markers+="[no validated RT-<N> red-team-review ledger entry found in EXPERIMENTS.md, or the highest-numbered RT-<N> block is not the validated one — need the LATEST '## RT-<N>' block to have its own '- path: red-team-review' and '- status: validated' lines] "
   fi
 fi
 
