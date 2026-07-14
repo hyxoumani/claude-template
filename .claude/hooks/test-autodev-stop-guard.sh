@@ -180,6 +180,22 @@ EOF
   report "MODE='bounded\\nextra' -> MODE-INVALID" "$ok"
 }
 
+# ---- scenario 3c: MODE has internal whitespace ("bound ed") ---------------
+# CodeRabbit-flagged bug: `tr -d '[:space:]'` strips ALL whitespace, not just
+# leading/trailing, so "bound ed" would collapse into the valid string
+# "bounded" and bypass fail-closed validation. Trimming only the ends must
+# still reject this.
+{
+  dir=$(new_scenario_dir "03c-mode-internal-whitespace")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bound ed' > "$dir/.autodev/MODE"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "MODE-INVALID" || ok=1
+  report "MODE='bound ed' (internal whitespace) -> MODE-INVALID, not collapsed to 'bounded'" "$ok"
+}
+
 # ---- scenario 4: canonical healthy bounded state -> Invariants hold -------
 {
   dir=$(new_scenario_dir "04-healthy-bounded")
@@ -379,6 +395,30 @@ EOF
   assert_contains "reason" "$HOOK_STDOUT" "COMPLETE-INVALID" || ok=1
   assert_contains "reason" "$HOOK_STDOUT" "RED_TEAM: EMPTY_HANDED" || ok=1
   report "COMPLETE missing RED_TEAM marker -> COMPLETE-INVALID naming it" "$ok"
+}
+
+# ---- scenario 9d: marker text embedded in prose, not on its own line ------
+# CodeRabbit-flagged bug: grep -qF (substring) would accept a marker string
+# appearing inside a sentence or failed-command output, even though the
+# completion contract requires each token on its own line. grep -qFx (whole
+# line) must reject this.
+{
+  dir=$(new_scenario_dir "09d-complete-marker-embedded-in-prose")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  cat > "$dir/.autodev/COMPLETE" <<'EOF'
+VERIFICATION: PASS
+The test suite failed with: RED_TEAM: EMPTY_HANDED was mentioned in a log line but is not a real marker.
+ACCEPTANCE_CRITERIA: MET
+EOF
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "COMPLETE-INVALID" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "RED_TEAM: EMPTY_HANDED" || ok=1
+  report "RED_TEAM marker text embedded in prose (not its own line) -> still COMPLETE-INVALID" "$ok"
 }
 
 # A minimal EXPERIMENTS.md fragment representing a genuinely validated,
@@ -690,6 +730,90 @@ EOF
   assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
   assert_eq "stdout" "" "$HOOK_STDOUT" || ok=1
   report "dispatch_log with 8 lines, only last 5 evaluated (one 'yes' at line 6) -> no violation" "$ok"
+}
+
+# ---- scenario 16: garbled iteration_count must not crash the hook ---------
+# CodeRabbit-flagged bug: under `set -u`, bash arithmetic treats a bareword
+# like "garbage" as a variable reference, not a string — an unset variable
+# of that name aborts the whole script with NO JSON emitted at all. The
+# hook must still emit a valid blocking JSON response.
+{
+  dir=$(new_scenario_dir "16-garbled-iteration-count")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 2 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  printf 'not-a-number' > "$dir/.autodev/iteration_count"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "QUEUE-VIOLATION" || ok=1
+  if [[ -z "$HOOK_STDOUT" ]]; then
+    echo "    FAIL detail: hook produced no output at all (crashed) instead of a blocking JSON response"
+    ok=1
+  fi
+  report "garbled iteration_count -> hook still emits valid JSON, does not crash" "$ok"
+}
+
+# ---- scenario 17: ledger status is a suffixed near-match, not exact -------
+# CodeRabbit-flagged bug: substring grep would count "status: proposed-later"
+# as a real "proposed" block. Anchored full-line matching must not.
+{
+  dir=$(new_scenario_dir "17-ledger-suffix-near-match")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  cat > "$dir/.autodev/EXPERIMENTS.md" <<'EOF'
+## Experiment X1: looks proposed but isn't
+- status: proposed-later
+Not a real proposed block — the hook must not count this.
+
+## Experiment R1: the one running experiment
+- status: running
+In progress.
+EOF
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "QUEUE-VIOLATION" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "only 0 'status: proposed'" || ok=1
+  report "'status: proposed-later' suffix near-match is not counted as a real proposed block" "$ok"
+}
+
+# ---- scenario 18: dispatch_log avenue field contains the 'yes' substring --
+# CodeRabbit-flagged bug: whole-line grep would let field 3 (avenue name)
+# accidentally contain "opened-unexplored: yes" and falsely satisfy the
+# quota even though field 4 (the real answer) says "no". Parsing field 4
+# exactly must not be fooled.
+{
+  dir=$(new_scenario_dir "18-dispatch-log-field3-lookalike")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  printf '1\tEXP-001\topened-unexplored: yes (fake avenue name)\topened-unexplored: no\n2\tEXP-002\tAvenue A\topened-unexplored: no\n3\tEXP-003\tAvenue A\topened-unexplored: no\n4\tEXP-004\tAvenue B\topened-unexplored: no\n5\tEXP-005\tAvenue B\topened-unexplored: no\n' > "$dir/.autodev/dispatch_log"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "NOVELTY-QUOTA-VIOLATION" || ok=1
+  report "dispatch_log field-3 lookalike text does not fool the field-4-only novelty check" "$ok"
+}
+
+# ---- scenario 19: RUNNING_SINCE set in the future -------------------------
+# CodeRabbit-flagged bug: a future timestamp produces negative elapsed,
+# which is always < STALE_SECONDS, silently granting an unbounded quiet-wait.
+{
+  dir=$(new_scenario_dir "19-running-since-future")
+  touch "$dir/.autodev/ACTIVE"
+  printf 'bounded' > "$dir/.autodev/MODE"
+  canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  canonical_paths > "$dir/.autodev/PATHS.md"
+  echo $(( $(date +%s) + 7200 )) > "$dir/.autodev/RUNNING_SINCE"
+  run_hook "$dir"
+  ok=0
+  assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
+  assert_contains "reason" "$HOOK_STDOUT" "STALE-DISPATCH-CHECK" || ok=1
+  report "RUNNING_SINCE 2 hours in the future -> rejected, STALE-DISPATCH-CHECK (not an unbounded quiet-wait)" "$ok"
 }
 
 # ---- summary ----------------------------------------------------------------
