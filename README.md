@@ -2,8 +2,11 @@
 
 A Claude Code project template that runs an **enforced autonomous development
 loop**: an orchestrator that, quant-firm style, continuously proposes
-experiments toward a goal and dispatches worker agents to execute them — and
-that **cannot stop** until the goal is verifiably complete.
+experiments toward a goal and dispatches worker agents to execute them. In
+**bounded** mode it cannot stop until the goal is verifiably complete (or the
+user manually aborts it); in **continuous** mode there is no completion
+state at all — it never stops on its own, only an explicit `/autodev stop`
+or the user interrupting the session ends it.
 
 ## Usage
 
@@ -63,7 +66,12 @@ completion claim and came back empty-handed, and a rationale is journaled
 `COMPLETE` itself is a structured attestation, not a bare marker: the hook
 greps it for three literal lines (`VERIFICATION: PASS`,
 `RED_TEAM: EMPTY_HANDED`, `ACCEPTANCE_CRITERIA: MET`) and treats it as
-invalid — naming the missing marker(s) — if any is absent.
+invalid — naming the missing marker(s) — if any is absent. The three
+markers are necessary but NOT sufficient by themselves: the hook also
+cross-references the live `EXPERIMENTS.md` and requires the
+HIGHEST-numbered `RT-<N>` block to have `path: red-team-review` and
+`status: validated` — a bare `COMPLETE` with the right marker text but no
+real, ledger-tracked, validated red-team review is rejected the same way.
 
 **Safety** — there is deliberately no iteration cap. Note Claude Code
 itself defaults to capping consecutive Stop-hook blocks at 8
@@ -88,7 +96,7 @@ agents, one at a time, and agents never spawn agents.
 | `reports/` | One full-detail report per agent dispatch (`<EXPERIMENT-ID>.md`), written by the agent itself — the one file agents may write under `.autodev/`; the orchestrator reads it only when the contracted summary isn't enough |
 | `ACTIVE` | Marker: session in progress — the Stop hook blocks exit while it exists |
 | `RUNNING_SINCE` | Unix timestamp of the current dispatch; lets the hook trust an agent is genuinely in flight and allow a quiet turn-end instead of a busywork nudge |
-| `COMPLETE` | Written only when the completion gate passes; must contain the three literal marker lines above or the hook treats it as invalid; valid + bounded mode is what lets the hook allow exit |
+| `COMPLETE` | Written only when the completion gate passes; must contain the three literal marker lines above AND have the highest-numbered `RT-<N>` block in `EXPERIMENTS.md` validated, or the hook treats it as invalid; valid + bounded mode is what lets the hook allow exit |
 | `iteration_count` | Blocked-stop counter, logging only |
 
 Because all state is in files, a crashed or closed session loses nothing —

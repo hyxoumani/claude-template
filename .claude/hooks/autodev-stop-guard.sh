@@ -78,10 +78,14 @@ if [[ ! -f "$STATE_DIR/ACTIVE" ]]; then
 fi
 
 MODE_RAW=$(cat "$STATE_DIR/MODE" 2>/dev/null)
-# Trim leading/trailing whitespace (incl. trailing newline) and require an
-# exact match — anything else (missing file, empty, garbled, extra text)
-# is invalid and must NEVER be silently treated as "bounded".
-MODE=$(printf '%s' "$MODE_RAW" | tr -d '[:space:]')
+# Trim ONLY leading/trailing whitespace (incl. trailing newline) and require
+# an exact match — anything else (missing file, empty, garbled, extra text,
+# OR internal whitespace like "bound ed") is invalid and must NEVER be
+# silently treated as "bounded". `tr -d '[:space:]'` would strip internal
+# whitespace too, letting a malformed value like "bound ed" collapse into
+# the valid string "bounded" and slip past this fail-closed check — sed
+# only trims the ends.
+MODE=$(printf '%s' "$MODE_RAW" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
 if [[ "$MODE" != "bounded" && "$MODE" != "continuous" ]]; then
   reason="AUTODEV ENFORCEMENT: MODE-INVALID: .autodev/MODE must contain exactly 'bounded' or 'continuous' (found: '${MODE_RAW}'). This is fail-closed — an invalid/missing/garbled MODE file is never treated as bounded. Fix MODE before this session can exit, and continue the loop."
@@ -108,7 +112,11 @@ if [[ -f "$STATE_DIR/COMPLETE" ]]; then
   complete_present=1
   complete_valid=1
   for marker in "${required_markers[@]}"; do
-    if ! grep -qF "$marker" "$STATE_DIR/COMPLETE" 2>/dev/null; then
+    # -x requires the marker to occupy the WHOLE line, not just appear as a
+    # substring — otherwise a marker string embedded in prose, a code fence,
+    # or failed-command output would satisfy the completion contract, which
+    # requires each token on its own line.
+    if ! grep -qFx -- "$marker" "$STATE_DIR/COMPLETE" 2>/dev/null; then
       complete_valid=0
       missing_markers+="'${marker}' "
     fi
@@ -176,9 +184,16 @@ else
   complete_violation=""
 fi
 
-# Iteration counter (logging/telemetry only — never a ceiling).
+# Iteration counter (logging/telemetry only — never a ceiling). Validate
+# before arithmetic: under `set -u`, bash arithmetic treats a non-numeric
+# bareword as a variable reference, so garbled content (not just "unset")
+# would abort the whole script with no JSON emitted at all — the opposite
+# of fail-closed. Any non-numeric content resets the counter rather than
+# crashing; this field is telemetry, never a gate, so resetting is safe.
 COUNT_FILE="$STATE_DIR/iteration_count"
-count=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)
+count_raw=$(cat "$COUNT_FILE" 2>/dev/null || echo "")
+count=0
+[[ "$count_raw" =~ ^[0-9]+$ ]] && count="$count_raw"
 count=$((count + 1))
 echo "$count" > "$COUNT_FILE"
 
@@ -197,10 +212,13 @@ block_statuses() {
 }
 
 # ---- Ledger audit -----------------------------------------------------------
+# Anchored to the full status line (allowing only trailing whitespace/CR) so
+# a value like "status: proposed-later" or "status: running-stale" is never
+# miscounted as the real "proposed"/"running" state via substring matching.
 LEDGER="$STATE_DIR/EXPERIMENTS.md"
 ledger_statuses=$(block_statuses "$LEDGER")
-proposed=$(printf '%s\n' "$ledger_statuses" | grep -c 'status: proposed')
-running=$(printf '%s\n' "$ledger_statuses" | grep -c 'status: running')
+proposed=$(printf '%s\n' "$ledger_statuses" | grep -cE '^- status: proposed[[:space:]]*$')
+running=$(printf '%s\n' "$ledger_statuses" | grep -cE '^- status: running[[:space:]]*$')
 
 violations="$complete_violation"
 if (( proposed < MIN_PROPOSED )); then
@@ -213,9 +231,11 @@ elif (( running > 1 )); then
 fi
 
 # ---- Exploration audit ------------------------------------------------------
+# Same full-line anchoring as the ledger audit above — "status: active-ish"
+# must not count as a real "active" avenue.
 PATHS_FILE="$STATE_DIR/PATHS.md"
 paths_statuses=$(block_statuses "$PATHS_FILE")
-if ! printf '%s\n' "$paths_statuses" | grep -qE 'status: (unexplored|active)'; then
+if ! printf '%s\n' "$paths_statuses" | grep -qE '^- status: (unexplored|active)[[:space:]]*$'; then
   violations+="EXPLORATION-VIOLATION: PATHS.md has no avenue with 'status: unexplored' or 'status: active'. Open a new avenue now — 'waiting for time/data' is never a reason to have zero open avenues. "
 fi
 
@@ -226,8 +246,12 @@ if [[ -f "$DISPATCH_LOG" ]]; then
   dispatch_line_count=$(grep -c '' "$DISPATCH_LOG" 2>/dev/null || echo 0)
 fi
 if (( dispatch_line_count >= 5 )); then
-  last5=$(tail -n 5 "$DISPATCH_LOG")
-  if ! printf '%s\n' "$last5" | grep -qE $'opened-unexplored:[[:space:]]*yes'; then
+  # Parse field 4 (tab-separated) exactly, rather than grepping the whole
+  # line — a whole-line search would let the avenue name (field 3) or any
+  # trailing text accidentally contain the substring "opened-unexplored:
+  # yes" and falsely satisfy the quota even when field 4 actually says "no".
+  novelty_yes_found=$(tail -n 5 "$DISPATCH_LOG" | awk -F'\t' '$4 ~ /^opened-unexplored: yes[ \t\r]*$/ { found=1 } END { print (found ? "yes" : "no") }')
+  if [[ "$novelty_yes_found" != "yes" ]]; then
     violations+="NOVELTY-QUOTA-VIOLATION: none of the last 5 dispatch_log entries opened an 'unexplored' avenue (need >= 1 in every 5). Your next dispatch MUST target an unexplored PATHS.md avenue, and remember to append its dispatch_log line. "
   fi
 fi
@@ -244,7 +268,10 @@ else
   [[ "$running_since_raw" =~ ^[0-9]+$ ]] && running_since="$running_since_raw"
   now=$(date +%s)
   elapsed=$(( now - running_since ))
-  if (( running_since > 0 && elapsed < STALE_SECONDS )); then
+  # A future RUNNING_SINCE (clock skew or a bug) produces a negative
+  # elapsed, which is always < STALE_SECONDS — reject it explicitly rather
+  # than letting a bogus future timestamp grant an unbounded quiet-wait.
+  if (( running_since > 0 && elapsed >= 0 && elapsed < STALE_SECONDS )); then
     exit 0
   fi
   directive="STALE-DISPATCH-CHECK: the one running experiment's .autodev/RUNNING_SINCE is missing or older than $((STALE_SECONDS / 60)) minutes. Confirm the dispatched agent is genuinely still working — if it silently failed, crashed, or was never actually dispatched, fix the ledger (redispatch or demote) and record a fresh RUNNING_SINCE. If it's legitimately still running, touch .autodev/RUNNING_SINCE again (date +%s > .autodev/RUNNING_SINCE) and continue waiting."
