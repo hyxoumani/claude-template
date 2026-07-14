@@ -31,7 +31,12 @@ verification, and reports back with evidence. Never spawns subagents. Full
 detail (diffs, command output) goes to `.autodev/reports/<ID>.md`; the
 final message the orchestrator actually sees is a contracted, under-150-word
 summary (verdict/files/tests/risks) — this is what keeps the orchestrator's
-own context from filling up with every agent's full output.
+own context from filling up with every agent's full output. A `PreToolUse`
+hook (`.claude/hooks/autodev-bash-guard.sh`) mechanically denies a small set
+of unambiguously destructive Bash patterns (force-push, `rm -rf /`, `git
+reset --hard`, blind `git checkout .`, history rewriting) as defense in
+depth — it's not a substitute for a real sandbox if the checkout is
+genuinely untrusted, just a backstop beyond prompt-level self-policing.
 
 **Enforcement** (`.claude/hooks/autodev-stop-guard.sh`, registered in
 `.claude/settings.json`) — a Stop hook, the same mechanism as Anthropic's

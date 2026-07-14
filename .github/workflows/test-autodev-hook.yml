@@ -24,3 +24,6 @@ jobs:
 
       - name: Run autodev-stop-guard regression tests
         run: bash .claude/hooks/test-autodev-stop-guard.sh
+
+      - name: Run autodev-bash-guard regression tests
+        run: bash .claude/hooks/test-autodev-bash-guard.sh

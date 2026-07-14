@@ -401,12 +401,22 @@ EOF
 # CodeRabbit-flagged bug: grep -qF (substring) would accept a marker string
 # appearing inside a sentence or failed-command output, even though the
 # completion contract requires each token on its own line. grep -qFx (whole
-# line) must reject this.
+# line) must reject this. CodeRabbit also caught that the ORIGINAL version
+# of this scenario had no valid RT-<N> entry at all, so it passed even
+# without the marker-matching fix (the missing-RT-entry check alone already
+# fails COMPLETE) — a valid RT-1 block is included here so the embedded
+# RED_TEAM marker text is the ONLY reason this scenario can fail.
 {
   dir=$(new_scenario_dir "09d-complete-marker-embedded-in-prose")
   touch "$dir/.autodev/ACTIVE"
   printf 'bounded' > "$dir/.autodev/MODE"
   canonical_ledger 3 > "$dir/.autodev/EXPERIMENTS.md"
+  cat >> "$dir/.autodev/EXPERIMENTS.md" <<'EOF'
+## RT-1: red-team review of completion claim
+- status: validated
+- path: red-team-review
+- outcome: empty-handed.
+EOF
   canonical_paths > "$dir/.autodev/PATHS.md"
   cat > "$dir/.autodev/COMPLETE" <<'EOF'
 VERIFICATION: PASS
@@ -748,11 +758,20 @@ EOF
   ok=0
   assert_eq "exit code" "0" "$HOOK_EXIT" || ok=1
   assert_contains "reason" "$HOOK_STDOUT" "QUEUE-VIOLATION" || ok=1
-  if [[ -z "$HOOK_STDOUT" ]]; then
-    echo "    FAIL detail: hook produced no output at all (crashed) instead of a blocking JSON response"
+  # CodeRabbit-flagged gap: a non-empty stdout check alone would pass for
+  # ANY text containing "QUEUE-VIOLATION", not just a well-formed blocking
+  # response — parse it and require the actual {"decision":"block",
+  # "reason":...} contract this scenario claims to test.
+  if ! printf '%s' "$HOOK_STDOUT" | python3 -c '
+import json, sys
+response = json.load(sys.stdin)
+assert response.get("decision") == "block"
+assert isinstance(response.get("reason"), str) and response["reason"]
+' 2>/dev/null; then
+    echo "    FAIL detail: hook did not produce a valid {\"decision\":\"block\",\"reason\":...} JSON response"
     ok=1
   fi
-  report "garbled iteration_count -> hook still emits valid JSON, does not crash" "$ok"
+  report "garbled iteration_count -> hook still emits valid blocking JSON, does not crash" "$ok"
 }
 
 # ---- scenario 17: ledger status is a suffixed near-match, not exact -------
